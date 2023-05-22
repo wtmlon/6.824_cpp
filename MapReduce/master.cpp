@@ -22,17 +22,18 @@ Master_node::Master_node(int map_num, int redu_num): _done(false), _map_num(map_
 
 void Master_node::get_files(char** files, int index)
 {
-    for(int i=0; i<index; i++)
+    for(int i=1; i<index; i++)
     {
         _list.emplace_back(files[i]);
     }
-    file_num = index;
+    file_num = index-1;
 }
 
 //unsafe
 bool Master_node::is_done_map()
 {
     //_lock.lock();     //感觉不用加锁也可以
+    std::cout << finish_maptask.size() << ' '<<file_num<<std::endl;
     return finish_maptask.size() == file_num;
 }
 
@@ -65,14 +66,18 @@ void* Master_node::wait_maptask(void* arg)
     //detecting ...
     if(map->finish_maptask.find(map->map_list[map->cur_mapid]) == map->finish_maptask.end())
     {
-        string filename = map->map_list[map->cur_mapid];
-        std::cout<<"filename: "<< filename <<" timeout!"<<std::endl;
+        //string filename = map->map_list[map->cur_mapid];
+        char* tmp = new char[200];
+        strcpy(tmp, map->map_list[map->cur_mapid].c_str());
+        std::cout<<"filename: "<< tmp <<" timeout!"<<std::endl;
         //两种插入方法，都要测试一下
         //char tmp[map->map_list[map->cur_mapid].length()+1];
         //strcpy(tmp, map->map_list[map->cur_mapid].c_str());
         //map->_list.push_back(tmp);
 
-        map->_list.push_back((char*)filename.c_str());
+        //这里这么写会导致离开函数字符串空间被释放导致乱码，因为_list存的只有指针
+        map->_list.push_back(tmp);
+        std::cout << tmp <<endl;
         map->cur_mapid++;
         map->_lock.unlock();
         return NULL;
@@ -111,6 +116,7 @@ string Master_node::assign()
 
 bool Master_node::done()
 {
+    std::cout<<"xxxxxxxxxx"<<finish_redutask.size() <<' '<<_reduce_num<<std::endl;
     return finish_redutask.size() == _reduce_num;
 }
 

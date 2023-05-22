@@ -10,8 +10,8 @@
 
 #include "locker.hpp"
 
-#define MAP_TIMEOUT 3
-#define REDU_TIMEOUT 5
+#define MAP_TIMEOUT 15
+#define REDU_TIMEOUT 15
 using namespace std;
 
 class Master_node{

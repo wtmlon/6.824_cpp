@@ -12,7 +12,7 @@ struct kv_pair {
 /*
  * 字符串分割，输入除了大小写字母就是空格
  */
-vector<string> split(char* text, int len)
+extern "C" vector<string> split(char* text, int len)
 {
 	vector<string> res;
 	string tmp;
@@ -38,7 +38,7 @@ vector<string> split(char* text, int len)
 /*
 *	接受一个kv对，把value部分的文本进行split后存进新的kv数组里
 */
-vector<kv_pair> map_f(kv_pair& inp)
+extern "C" vector<kv_pair> map_f(kv_pair& inp)
 {
 	vector<kv_pair> res;
 	int len = inp.value.length();
@@ -59,7 +59,7 @@ vector<kv_pair> map_f(kv_pair& inp)
 对特定的key进行reduce，统计某个key的出现次数
 输入为某个key的所有kv_pair
 */
-vector<string> reduce_f(vector<kv_pair>& inp)
+extern "C" vector<string> reduce_f(vector<kv_pair>& inp)
 {
 	vector<string> res;
 	for(auto& i: inp)

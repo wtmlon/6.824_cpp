@@ -11,7 +11,7 @@ int main(int argc, char* argv[])
     }
     buttonrpc server;
     server.as_server(5555);
-    Master_node master(13, 9);  //13 map work 9 redu work
+    Master_node master(1, 1);  //13 map work 9 redu work
     master.get_files(argv, argc);
     server.bind("get_map_num", &Master_node::get_mapn, &master);
     server.bind("get_redu_num", &Master_node::get_redn, &master);

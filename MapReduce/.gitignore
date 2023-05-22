@@ -1,0 +1,5 @@
+*.so
+*.o
+mr*
+*nfs*
+*vscode*
