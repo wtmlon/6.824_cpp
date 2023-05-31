@@ -1,5 +1,6 @@
 Raft: raft.cpp
 	g++ -g -o Raft raft.cpp -lzmq -lpthread
+	make clean
 
 rpc_test:
 	g++ -g -o rpc_s rpc_test.cpp -lzmq -lpthread

@@ -255,7 +255,7 @@ void* Raft::listen4append(void* arg)
 {
     Raft* raft = (Raft*) arg;
     buttonrpc server;
-    server.as_server(raft->peers[raft->_peer_id]._port.first);
+    server.as_server(raft->peers[raft->_peer_id]._port.second);
     server.bind("req_append", &Raft::recv_append, raft);
 
     pthread_t tid;
@@ -289,6 +289,8 @@ void* Raft::log_process_loop(void* arg)
 
         //到时间了
         gettimeofday(&raft->_last_broadcast_time, NULL);
+        //虽然want2vote和want2append都会用这个值，但是两者不可能在同一个时空运行
+        raft->_cur_peer_id = 0;
         raft->_lock.unlock();
         //req_append req;
         //req.term = raft->_cur_term;
@@ -319,7 +321,9 @@ void* Raft::want2append(void* arg)
         raft->_cur_peer_id++;
     }
     int now_idx = raft->_cur_peer_id++;
+    //std::cout<<"want2append link to: "<<now_idx<<" port: "<<raft->peers[now_idx]._port.second<<std::endl;
     client.as_client("127.0.0.1", raft->peers[now_idx]._port.second);
+    //client.set_timeout(5000);
 
     req.term = raft->_cur_term;
     req.leader_id = raft->_peer_id;
@@ -348,7 +352,7 @@ void* Raft::want2append(void* arg)
     printf("[%d]->[%d]: req append. last log idx: %d, last log term: %d", raft->_peer_id, now_idx, req.last_log_idx, req.last_log_term);
     raft->_lock.unlock();
 
-    resp_append resp = client.call<resp_append>("want2append", req).val();
+    resp_append resp = client.call<resp_append>("req_append", req).val();
 
     raft->_lock.lock();
 
@@ -509,11 +513,7 @@ resp_append Raft::recv_append(req_append req)
     {
         _commit_id = min(req.leader_commit, (int)_log.size());
     }
-    for(auto&it : _log)
-    {
-        std::cout<<it._term<<std::endl;
-    }
-    std::cout<<"append succ"<<std::endl;
+    std::cout<<"append succ, term: "<<_cur_term<<std::endl;
     _lock.unlock();
     resp.succ = true;
     return resp;
@@ -602,10 +602,24 @@ void* Raft::want2vote(void* arg)
     if(raft->_cur_peer_id == raft->_peer_id)raft->_cur_peer_id++;
 
     client.as_client("127.0.0.1", raft->peers[raft->_cur_peer_id++]._port.first);
+    //client.set_timeout(5000);
     //if(raft->_cur_peer_id == raft->peers.size() || )
     raft->_lock.unlock();
 
-    resp_vote resp = client.call<resp_vote>("recv_vote", req).val();
+    std::cout<<raft->_peer_id<<" sending recv vote"<<std::endl;
+    auto ret = client.call<resp_vote>("req_vote", req);
+    if(!ret.valid())
+    {
+        //timeout 自增finish_votes，让等待端退出
+        raft->_lock.lock();
+        raft->finish_votes++;
+        std::cout<<raft->_peer_id<<" recv vote fail! error: "<<ret.error_msg()<<std::endl;
+        raft->_cond.signal();
+        raft->_lock.unlock();
+        return NULL;
+    }
+    resp_vote resp = ret.val();
+    std::cout<<raft->_peer_id<<" recv vote return, val: "<<resp.term<<' '<<resp.vote_grant<<std::endl;
 
     raft->_lock.lock();
     raft->finish_votes++;
@@ -672,13 +686,14 @@ void* Raft::election_loop(void* arg)
                     t++;
                 }
                 //没有收到所有的回复，活着当前选票还不够
-                while(raft->recv_votes <= raft->peers.size() / 2 || raft->finish_votes < raft->peers.size())
+                while(raft->recv_votes <= raft->peers.size() / 2 && raft->finish_votes < raft->peers.size())
                 {
                     raft->_cond.wait(&raft->_lock);
                 }
                 if(raft->_state != CANDIDATE)
                 {
                     raft->_lock.unlock();
+                    std::cout<<raft->_peer_id<<" election for leader fail in term: "<<raft->_cur_term<<std::endl;
                     continue;
                 }
                 //获得了超过半数的选票
@@ -694,6 +709,10 @@ void* Raft::election_loop(void* arg)
                     }
                     std::cout<<raft->_peer_id<<" become a leader in term: "<<raft->_cur_term<<std::endl;
                     raft->set_broadcast_time();
+                }
+                else
+                {
+                    std::cout<<raft->_peer_id<<" elect for leader fail in term: "<<raft->_cur_term<<std::endl;
                 }
             }
             raft->_lock.unlock();
@@ -726,8 +745,9 @@ void* Raft::listen4vote(void* arg)
 {
     Raft* raft = (Raft*)arg;
     buttonrpc server;
-    server.as_server(raft->peers[raft->_peer_id]._port.second);
+    server.as_server(raft->peers[raft->_peer_id]._port.first);
     server.bind("req_vote", &Raft::recv_vote, raft);
+    //std::cout<<"req_vote registery!"<<std::endl;
 
     pthread_t wait_tid;
     pthread_create(&wait_tid, NULL, election_loop, raft);
@@ -767,6 +787,7 @@ void Raft::serialize(){
     {
         str += it._op + "," + to_string(it._term) + ".";
     }
+    //std::cout<<_peer_id<<" serialize data: "<<str<<std::endl;
     string filename = "persister-" + to_string(_peer_id);
     int fd;
     if(access(filename.c_str(), F_OK) == -1)
@@ -775,23 +796,24 @@ void Raft::serialize(){
         fd = open(filename.c_str(), O_RDWR | O_TRUNC, 0664);
     if(fd == -1)
     {
-        perror("open");
+        perror("serialize open");
         exit(-1);
     }
     int len = write(fd, str.c_str(), str.length());
     assert(len == str.length());
+    close(fd);
 }
 
 bool Raft::deserialize(){
     string path = "persister-" + to_string(_peer_id);
     if(access(path.c_str(), F_OK) == -1){
-        perror("open");
+        perror("deserialize access");
         return false;
     }
     int fd = open(path.c_str(), O_RDONLY);
     if(fd == -1)
     {
-        perror("open");
+        perror("deserialize open");
         return false;
     }
     int length = lseek(fd, 0, SEEK_END);
@@ -800,6 +822,7 @@ bool Raft::deserialize(){
     memset(buf, 0, sizeof(buf));
     int len = read(fd, buf, length);
     assert(len == length);
+    close(fd);
 
     istringstream ss(buf);
     vector<string> tmp_list;
@@ -869,33 +892,51 @@ int main(int argc, char *argv[])
         raft[i].Make(peers, i);
     }
 
+    while(1)
+    {
+        bool found = false;
+        for(int i=0; i<peers.size(); i++)
+        {
+            if(raft[i].get_state().second)
+            {
+                found = true;
+            }
+        }
+        if(found)
+            break;
+    }
+
+    std::cout<<"Test Begin!"<<std::endl;
     /*-----------------------------TEsT-------------------------------------*/
-    usleep(400000);
     for(int i=0; i<peers.size(); i++)
     {
         if(raft[i].get_state().second)
         {
-            for(int j=0; j<1000; j++)
+            std::cout<<"find leader!"<<std::endl;
+            for(int j=0; j<50; j++)
             {
                 Operation op;
                 op.op = "put";
                 op.key = to_string(j);
                 op.value = to_string(j);
                 raft[i].start(op);
-                usleep(50000);
+                //usleep(50000);
             }
         }
         else
             continue;
     }
-
-    usleep(400000);
-    for(int i=0; i<peers.size(); i++)
+    usleep(4000000);
+    for(int j=0; j<5; j++)//进行5次主节点崩溃模拟
     {
-        if(raft[i].get_state().second){
-            raft[i].suicide();
-            break;
+        for(int i=0; i<peers.size(); i++)
+        {
+            if(raft[i].get_state().second){
+                raft[i].suicide();
+                break;
+            }
         }
+        usleep(4000000);
     }
     /*-----------------------------TEsT-------------------------------------*/
     std::cout<<"Test Over!"<<std::endl;
